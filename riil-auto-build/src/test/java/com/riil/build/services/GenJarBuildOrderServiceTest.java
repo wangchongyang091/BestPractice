@@ -17,15 +17,15 @@ import org.junit.Test;
  * User: wangchongyang on 2017/9/8 0008.
  */
 public class GenJarBuildOrderServiceTest {
-    public static final String TRUNK_SOURCE = "\\trunk\\source";
-
-
-    public static final String RIIL_WEBFRAMEWORK_PATH = "E:\\codeSVN\\RIIL_WebFramework";
-    private static final String super3rdPom = "D:\\m2_repository\\com\\riil\\super.3rd.pom\\6.8.7-SNAPSHOT\\super.3rd.pom-6.8.7-SNAPSHOT.pom";
+    private static final String RIIL_WEBFRAMEWORK_PATH = "E:\\codeSVN\\RIIL_WebFramework";
+    private static final String TRUNK_SOURCE = "\\trunk\\source";
+    private static final String superRiilPomPath = "D:\\m2_repository\\com\\riil\\super.riil.pom\\6.8.7-SNAPSHOT\\super.riil.pom-6.8.7-SNAPSHOT.pom";
+    private static final String super3rdPomPath = "D:\\m2_repository\\com\\riil\\super.3rd.pom\\6.8.7-SNAPSHOT\\super.3rd.pom-6.8.7-SNAPSHOT.pom";
     private static final String RIIL_BMC_ADMINCONSOLE_PATH = "E:\\codeSVN\\RIIL_BMC_AdminConsole";
     private static final String EAC_ACTION_POM_PATH = "E:\\codeSVN\\RIIL_BMC_EAC\\trunk\\source\\riil-eac-action\\pom.xml";
     private static final String NEO4J_DATA_PATH = "E:\\works\\neo4j\\neo4j.db";
     private static final String RIIL_BMC_FRAMEWORK_PATH = "E:\\codeSVN\\RIIL_WebFramework";
+    private static final String riilWebDependencyPomPath = "D:\\m2_repository\\com\\riil\\webapp\\riil.web.dependency\\6.8.7-SNAPSHOT\\riil.web.dependency-6.8.7-SNAPSHOT.pom";
     private static GenJarBuildOrderService buildOrderService;
 
     @BeforeClass
@@ -34,13 +34,15 @@ public class GenJarBuildOrderServiceTest {
     }
 
     @Test
-    public void register3rdJar() throws Exception {
-        buildOrderService.register3rdJar(super3rdPom);
+    public void registerSuperJar() throws Exception {
+        buildOrderService.registerSuperRiilJar(superRiilPomPath);
+        buildOrderService.registerSuper3rdJar(riilWebDependencyPomPath);
+        System.out.println(GenJarBuildOrderService.superJarRegister.values() + "\nsize=" + GenJarBuildOrderService.superJarRegister.size());
     }
 
     @Test
     public void getPomsBySpecifyRange() throws Exception {
-        final List<File> pomList = buildOrderService.getPomsBySpecifyRange(RIIL_BMC_ADMINCONSOLE_PATH + TRUNK_SOURCE);
+        final List<File> pomList = buildOrderService.getPomsBySpecifyRange(RIIL_WEBFRAMEWORK_PATH + TRUNK_SOURCE);
         for (File file : pomList) {
             System.out.println(file.getCanonicalPath()/*+":"+file.getParent()*/);
         }

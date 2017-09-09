@@ -38,28 +38,18 @@ import org.neo4j.graphdb.traversal.Uniqueness;
  * User: wangchongyang on 2017/9/8 0008.
  */
 class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
-    public static final SAXReader SAX_READER = new SAXReader();
+    private static final SAXReader SAX_READER = new SAXReader();
     private GraphDatabaseService graphDb;
-    private String localRepository = "D:\\m2_repository";
+
 
     @Override
-    public void register3rdJar(final String super3rdPom) throws ParsePomException {
-        try {
-            final Document document = SAX_READER.read(new File(super3rdPom));
-            final Element rootElement = document.getRootElement();
-            final Element propertiesEle = rootElement.element("properties");
-            final Iterator<Element> properties = propertiesEle.elementIterator();
-            Map<String, String> jarVersionMap = Maps.newHashMap();
-            while (properties.hasNext()) {
-                final Element versionEle = properties.next();
-                jarVersionMap.put(versionEle.getName(), versionEle.getTextTrim());
+    public void registerSuperRiilJar(final String superRiilPomPath) throws ParsePomException {
+        registerSuperJar(superRiilPomPath);
+    }
 
-            }
-            System.out.println(jarVersionMap);
-        } catch (Exception e) {
-            throw new ParsePomException(e);
-        }
-
+    @Override
+    public void registerSuper3rdJar(final String super3rdPomPath) throws ParsePomException {
+        registerSuperJar(super3rdPomPath);
     }
 
     @Override
@@ -74,22 +64,6 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         } catch (Exception e) {
             throw new ParsePomException(e);
         }
-    }
-
-    private List<File> getPomFiles(List<File> fileList, final File parseFile) throws IOException {
-        if (parseFile.exists()) {
-            if (parseFile.isDirectory()) {
-                final File[] files = parseFile.listFiles();
-                if (files != null) {
-                    for (File file : files) {
-                        getPomFiles(fileList, file);
-                    }
-                }
-            } else if ("pom.xml".equalsIgnoreCase(parseFile.getName())) {
-                fileList.add(parseFile);
-            }
-        }
-        return fileList;
     }
 
     @Override
@@ -133,15 +107,29 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         }
     }
 
+    private List<File> getPomFiles(List<File> fileList, final File parseFile) throws IOException {
+        if (parseFile.exists()) {
+            if (parseFile.isDirectory()) {
+                final File[] files = parseFile.listFiles();
+                if (files != null) {
+                    for (File file : files) {
+                        getPomFiles(fileList, file);
+                    }
+                }
+            } else if ("pom.xml".equalsIgnoreCase(parseFile.getName())) {
+                fileList.add(parseFile);
+            }
+        }
+        return fileList;
+    }
+
+
     private List<Set<JarPojo>> covert2JarList(final List<Set<Node>> buildNodeList) {
         List<Set<JarPojo>> buildJarList = Lists.newArrayList();
         for (Set<Node> nodes : buildNodeList) {
             Set<JarPojo> jarPojoSet = Sets.newHashSet();
             for (Node node : nodes) {
-                final JarPojo jarPojo = new JarPojo();
-                jarPojo.setGroupId((String) node.getProperty("groupId"));
-                jarPojo.setArtifactId((String) node.getProperty("artifactId"));
-                jarPojo.setVersion((String) node.getProperty("version"));
+                final JarPojo jarPojo = new JarPojo((String) node.getProperty("groupId"), (String) node.getProperty("artifactId"), (String) node.getProperty("version"));
                 jarPojoSet.add(jarPojo);
             }
             buildJarList.add(jarPojoSet);
@@ -320,6 +308,36 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
                 graphDb.shutdown();
             }
         });
+    }
+
+    private void registerSuperJar(final String superPomFilePath) throws ParsePomException {
+        try {
+            final Document document = SAX_READER.read(new File(superPomFilePath));
+            final Element rootElement = document.getRootElement();
+            final Element propertiesEle = rootElement.element("properties");
+            final Iterator<Element> properties = propertiesEle.elementIterator();
+            Map<String, String> jarVersionMap = Maps.newHashMap();
+            while (properties.hasNext()) {
+                final Element versionEle = properties.next();
+                jarVersionMap.put("${" + versionEle.getName() + "}", versionEle.getTextTrim());
+
+            }
+            final Element dependencyManagementEle = rootElement.element("dependencyManagement");
+            final Element dependenciesEle = dependencyManagementEle.element("dependencies");
+            final Iterator<Element> dependencyIterator = dependenciesEle.elementIterator("dependency");
+            while (dependencyIterator.hasNext()) {
+                final Element dependencyEle = dependencyIterator.next();
+                final String groupId = dependencyEle.elementTextTrim("groupId");
+                final String artifactId = dependencyEle.elementTextTrim("artifactId");
+                final String version = dependencyEle.elementTextTrim("version");
+                final String type = dependencyEle.elementTextTrim("type");
+                if (!(StringUtils.isNotBlank(type) && "pom".equalsIgnoreCase(type))) {
+                    superJarRegister.put(groupId + ":" + artifactId, new JarPojo(groupId, artifactId, jarVersionMap.getOrDefault(version, version)));
+                }
+            }
+        } catch (Exception e) {
+            throw new ParsePomException(e);
+        }
     }
 
     enum MyLabels implements Label {

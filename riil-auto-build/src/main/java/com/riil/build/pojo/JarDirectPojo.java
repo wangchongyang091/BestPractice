@@ -21,20 +21,14 @@ public class JarDirectPojo extends JarPojo {
 
     @Override
     public String toString() {
-        return "JarDirectPojo{" +
-                "\ngroupId=" + super.getGroupId() +
-                "\nartifactId=" + super.getArtifactId() +
-                "\nversion=" + super.getVersion() +
-                "\ndirectDependency=" + directToString() +
-                "\ndirectDependencySize=" + getDirectDependency().size() +
-                '}';
+        return String.format("%s:%s:%s\n%s\ndirectDependencySize=%d", this.getGroupId(), this.getArtifactId(), this.getVersion(), directToString(), getDirectDependency().size());
     }
 
     private List<String> directToString() {
         final Set<JarPojo> directDependency = getDirectDependency();
         List<String> artifactIds = Lists.newArrayList();
         for (JarPojo jarPojo : directDependency) {
-            artifactIds.add("\n  " + jarPojo.getGroupId() + ":" + jarPojo.getArtifactId() + ":" + jarPojo.getVersion());
+            artifactIds.add(String.format("\n  %s:%s:%s", jarPojo.getGroupId(), jarPojo.getArtifactId(), jarPojo.getVersion()));
         }
         return artifactIds;
     }

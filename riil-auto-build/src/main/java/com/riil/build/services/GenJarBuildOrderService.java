@@ -14,9 +14,11 @@ import java.util.Set;
  * User: wangchongyang on 2017/9/8 0008.
  */
 public interface GenJarBuildOrderService {
-    Map<String, JarPojo> super3rdJarRegister = Maps.newHashMap();
+    Map<String, JarPojo> superJarRegister = Maps.newHashMap();
 
-    void register3rdJar(String super3rdPom) throws ParsePomException;
+    void registerSuperRiilJar(String superRiilPomPath) throws ParsePomException;
+
+    void registerSuper3rdJar(String super3rdPomPath) throws ParsePomException;
 
     List<File> getPomsBySpecifyRange(String path) throws ParsePomException;
 

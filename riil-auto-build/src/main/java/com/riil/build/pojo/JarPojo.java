@@ -8,6 +8,15 @@ public class JarPojo {
     private String artifactId;
     private String version;
 
+    public JarPojo(final String groupId, final String artifactId, final String version) {
+        this.groupId = groupId;
+        this.artifactId = artifactId;
+        this.version = version;
+    }
+
+    public JarPojo() {
+
+    }
 
     public String getGroupId() {
         return groupId;
@@ -35,11 +44,6 @@ public class JarPojo {
 
     @Override
     public String toString() {
-//        return ToStringBuilder.reflectionToString(this, ToStringStyle.MULTI_LINE_STYLE);
-        return "JarPojo{" +
-//                "groupId='" + groupId + '\'' +
-                ", artifactId='" + artifactId + '\'' +
-//                ", version='" + version + '\'' +
-                '}';
+        return String.format("%s:%s:%s\n", groupId, artifactId, version);
     }
 }
