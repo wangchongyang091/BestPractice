@@ -80,8 +80,10 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         if (parseFile.exists()) {
             if (parseFile.isDirectory()) {
                 final File[] files = parseFile.listFiles();
-                for (File file : files) {
-                    getPomFiles(fileList, file);
+                if (files != null) {
+                    for (File file : files) {
+                        getPomFiles(fileList, file);
+                    }
                 }
             } else if ("pom.xml".equalsIgnoreCase(parseFile.getName())) {
                 fileList.add(parseFile);
