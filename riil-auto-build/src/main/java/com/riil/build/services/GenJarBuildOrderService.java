@@ -22,7 +22,7 @@ public interface GenJarBuildOrderService {
 
     List<File> getPomsBySpecifyRange(String path) throws ParsePomException;
 
-    JarDirectPojo getDirectDependencyByPom(String pomFilePath) throws ParsePomException;
+    JarDirectPojo getDirectDependencyByPom(File pomFile) throws ParsePomException;
 
     List<Set<JarPojo>> getJarBuildOrder(List<JarDirectPojo> jarDirectPojos, String neo4jDbPath) throws GenDependencyRealtionException;
 }
