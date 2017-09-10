@@ -5,8 +5,8 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.riil.build.exception.GenDependencyRealtionException;
 import com.riil.build.exception.ParsePomException;
-import com.riil.build.pojo.JarDirectPojo;
-import com.riil.build.pojo.JarPojo;
+import com.riil.build.pojo.BasicBuildPojo;
+import com.riil.build.pojo.BasicBuildRelationPojo;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
@@ -18,6 +18,7 @@ import java.util.Set;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.dom4j.Document;
+import org.dom4j.DocumentException;
 import org.dom4j.Element;
 import org.dom4j.io.SAXReader;
 import org.neo4j.graphdb.Direction;
@@ -44,12 +45,12 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
 
     @Override
     public void registerSuperRiilJar(final String superRiilPomPath) throws ParsePomException {
-        registerSuperJar(superRiilPomPath);
+//        registerSuperJar(superRiilPomPath);
     }
 
     @Override
     public void registerSuper3rdJar(final String super3rdPomPath) throws ParsePomException {
-        registerSuperJar(super3rdPomPath);
+//        registerSuperJar(super3rdPomPath);
     }
 
     @Override
@@ -67,38 +68,69 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
     }
 
     @Override
-    public JarDirectPojo getDirectDependencyByPom(final String pomFilePath) throws ParsePomException {
-        final JarDirectPojo jarDirectPojo = new JarDirectPojo();
+    public Map<String, String> genProjectBuildPathRegister(final List<File> pomFiles) throws ParsePomException {
         try {
-            final File pomFile = new File(pomFilePath);
-            final Document document = SAX_READER.read(pomFile);
-            final Element rootElement = document.getRootElement();
-            jarDirectPojo.setGroupId(rootElement.elementTextTrim("groupId"));
-            jarDirectPojo.setArtifactId(rootElement.elementTextTrim("artifactId"));
-            final String version = rootElement.element("parent").elementTextTrim("version");
-            jarDirectPojo.setVersion(version);
-            final Element dependencies = rootElement.element("dependencies");
-            final Iterator dependencyEle = dependencies.elementIterator("dependency");
-            Set<JarPojo> jarDirectPojoSet = Sets.newHashSet();
-            while (dependencyEle.hasNext()) {
-                final Element dependency = (Element) dependencyEle.next();
-                final JarPojo jarPojo = new JarPojo();
-                jarPojo.setGroupId(dependency.elementTextTrim("groupId"));
-                jarPojo.setArtifactId(dependency.elementTextTrim("artifactId"));
-                jarDirectPojoSet.add(jarPojo);
+            Map<String, String> buildPathRegister = Maps.newHashMap();
+            for (File pomFile : pomFiles) {
+                final Document document = SAX_READER.read(pomFile);
+                final Element projectEle = document.getRootElement();
+                String groupId = projectEle.elementTextTrim("groupId");
+                final String artifactId = projectEle.elementTextTrim("artifactId");
+                if (StringUtils.isBlank(groupId)) {
+                    groupId = projectEle.element("parent").elementTextTrim("groupId");
+                }
+                buildPathRegister.put(String.format("%s:%s", groupId, artifactId), pomFile.getParent());
             }
-            jarDirectPojo.setDirectDependency(jarDirectPojoSet);
-        } catch (Exception e) {
+            return buildPathRegister;
+        } catch (DocumentException e) {
             throw new ParsePomException(e);
         }
-        return jarDirectPojo;
     }
 
     @Override
-    public List<Set<JarPojo>> getJarBuildOrder(final List<JarDirectPojo> jarDirectPojos, String neo4jDbPath) throws GenDependencyRealtionException {
+    public Set<BasicBuildRelationPojo> getBuildRelations(final List<File> pomFiles) throws ParsePomException {
+        final Map<String, String> buildPathRegister = genProjectBuildPathRegister(pomFiles);
+        Set<BasicBuildRelationPojo> relationPojoSet = Sets.newHashSet();
+        try {
+            for (File pomFile : pomFiles) {
+                final Document document = SAX_READER.read(pomFile);
+                final Element projectEle = document.getRootElement();
+                final String parentGroupId = projectEle.element("parent").elementTextTrim("groupId");
+                final String parentArtifactId = projectEle.element("parent").elementTextTrim("artifactId");
+                Set<BasicBuildPojo> jarDirectPojoSet = Sets.newHashSet();
+                addBeforeBuildPath(buildPathRegister, jarDirectPojoSet, parentGroupId, parentArtifactId);
+                final BasicBuildRelationPojo RelationPojo = new BasicBuildRelationPojo();
+                RelationPojo.setBuildPath(pomFile.getParent());
+                final Element dependencyManagementEle = projectEle.element("dependencyManagement");
+                if (null != dependencyManagementEle) {
+                    final Iterator dependencyEles = dependencyManagementEle.element("dependencies").elementIterator("dependency");
+                    while (dependencyEles.hasNext()) {
+                        final Element dependencyEle = (Element) dependencyEles.next();
+                        if ("pom".equals(dependencyEle.elementTextTrim("type"))) {
+                            addBeforeBuildPath(buildPathRegister, jarDirectPojoSet, dependencyEle.elementTextTrim("groupId"), dependencyEle.elementTextTrim("artifactId"));
+                        }
+                    }
+                } else {
+                    final Iterator dependencyEles = projectEle.element("dependencies").elementIterator("dependency");
+                    while (dependencyEles.hasNext()) {
+                        final Element dependencyEle = (Element) dependencyEles.next();
+                        addBeforeBuildPath(buildPathRegister, jarDirectPojoSet, dependencyEle.elementTextTrim("groupId"), dependencyEle.elementTextTrim("artifactId"));
+                    }
+                }
+                RelationPojo.setBeforeBuilds(jarDirectPojoSet);
+                relationPojoSet.add(RelationPojo);
+            }
+        } catch (Exception e) {
+            throw new ParsePomException(e);
+        }
+        return relationPojoSet;
+    }
+
+    @Override
+    public List<Set<BasicBuildPojo>> getJarBuildOrder(final Set<BasicBuildRelationPojo> jarDirectPojos, String neo4jDbPath) throws GenDependencyRealtionException {
         try {
             startDb(neo4jDbPath);
-            createDb(jarDirectPojos);
+//            createDb(jarDirectPojos);
             final Map<Node, Integer> nodeIntegerMap = generateNodeLongestPath();
             final List<Set<Node>> buildNodeList = convert2buildSort(nodeIntegerMap);
             return covert2JarList(buildNodeList);
@@ -123,18 +155,24 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         return fileList;
     }
 
-
-    private List<Set<JarPojo>> covert2JarList(final List<Set<Node>> buildNodeList) {
-        List<Set<JarPojo>> buildJarList = Lists.newArrayList();
+    private List<Set<BasicBuildPojo>> covert2JarList(final List<Set<Node>> buildNodeList) {
+        List<Set<BasicBuildPojo>> buildJarList = Lists.newArrayList();
         for (Set<Node> nodes : buildNodeList) {
-            Set<JarPojo> jarPojoSet = Sets.newHashSet();
+            Set<BasicBuildPojo> basicBuildPojoSet = Sets.newHashSet();
             for (Node node : nodes) {
-                final JarPojo jarPojo = new JarPojo((String) node.getProperty("groupId"), (String) node.getProperty("artifactId"), (String) node.getProperty("version"));
-                jarPojoSet.add(jarPojo);
+                basicBuildPojoSet.add(new BasicBuildPojo((String) node.getProperty("buildPath")));
             }
-            buildJarList.add(jarPojoSet);
+            buildJarList.add(basicBuildPojoSet);
         }
         return buildJarList;
+    }
+
+
+    private void addBeforeBuildPath(final Map<String, String> buildPathRegister, final Set<BasicBuildPojo> jarDirectPojoSet, final String groupId, final String artifactId) {
+        String buildPath = buildPathRegister.get(String.format("%s:%s", groupId, artifactId));
+        if (null != buildPath) {
+            jarDirectPojoSet.add(new BasicBuildPojo(buildPath));
+        }
     }
 
     private void startDb(String neo4jDbPath) {
@@ -143,7 +181,7 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         registerShutdownHook(graphDb);
     }
 
-    private void createDb(List<JarDirectPojo> jarDirectPojos) {
+    private void createDb(Set<BasicBuildRelationPojo> jarDirectPojos) {
 //        FileUtils.deleteRecursively(DB_PATH);
 //        transaction
         try (Transaction tx = graphDb.beginTx()) {
@@ -153,35 +191,23 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         }
     }
 
-    private void addData(List<JarDirectPojo> jarDirectPojos) {
+    private void addData(Set<BasicBuildRelationPojo> jarDirectPojos) {
         if (CollectionUtils.isNotEmpty(jarDirectPojos)) {
             Map<Node, Set<Node>> nodeRelationMap = Maps.newHashMap();
             Map<String, Node> nodeRegister = Maps.newHashMap();
-            for (JarDirectPojo jarDirectPojo : jarDirectPojos) {
-                String nodeMark = String.format("%s:%s:%s", jarDirectPojo.getGroupId(), jarDirectPojo.getArtifactId(), jarDirectPojo.getVersion());
-                Node jarNode = null;
-                if (nodeRegister.containsKey(nodeMark)) {
-                    jarNode = nodeRegister.get(nodeMark);
-                } else {
-                    jarNode = createNode(jarDirectPojo);
-                    nodeRegister.put(nodeMark, jarNode);
-                }
-                final Set<JarPojo> jarDepSet = jarDirectPojo.getDirectDependency();
+            for (BasicBuildRelationPojo buildRelation : jarDirectPojos) {
+                String nodeMark = buildRelation.getBuildPath();
+                Node buildNode = getNode(nodeRegister, buildRelation, nodeMark);
+                final Set<BasicBuildPojo> jarDepSet = buildRelation.getBeforeBuilds();
                 Set<Node> jarDepNodeSet = Sets.newHashSet();
                 if (CollectionUtils.isNotEmpty(jarDepSet)) {
-                    for (JarPojo jarPojo : jarDepSet) {
-                        nodeMark = String.format("%s:%s:%s", jarPojo.getGroupId(), jarPojo.getArtifactId(), jarPojo.getVersion());
-                        Node jarDepNode;
-                        if (nodeRegister.containsKey(nodeMark)) {
-                            jarDepNode = nodeRegister.get(nodeMark);
-                        } else {
-                            jarDepNode = createNode(jarPojo);
-                            nodeRegister.put(nodeMark, jarDepNode);
-                        }
+                    for (BasicBuildPojo build : jarDepSet) {
+                        nodeMark = build.getBuildPath();
+                        Node jarDepNode = getNode(nodeRegister, build, nodeMark);
                         jarDepNodeSet.add(jarDepNode);
                     }
                 }
-                nodeRelationMap.put(jarNode, jarDepNodeSet);
+                nodeRelationMap.put(buildNode, jarDepNodeSet);
             }
             for (Map.Entry<Node, Set<Node>> nodeSetEntry : nodeRelationMap.entrySet()) {
                 final Set<Node> depNodes = nodeSetEntry.getValue();
@@ -193,6 +219,17 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
                 }
             }
         }
+    }
+
+    private Node getNode(final Map<String, Node> nodeRegister, final BasicBuildPojo buildRelation, final String nodeMark) {
+        Node buildNode;
+        if (nodeRegister.containsKey(nodeMark)) {
+            buildNode = nodeRegister.get(nodeMark);
+        } else {
+            buildNode = createNode(buildRelation);
+            nodeRegister.put(nodeMark, buildNode);
+        }
+        return buildNode;
     }
 
     private Map<Node, Integer> generateNodeLongestPath() {
@@ -289,12 +326,10 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         return endNodes;
     }
 
-    private Node createNode(final JarPojo jarDirectPojo) {
-        final Node jarNode = graphDb.createNode(MyLabels.JAR);
-        jarNode.setProperty("groupId", jarDirectPojo.getGroupId());
-        jarNode.setProperty("artifactId", jarDirectPojo.getArtifactId());
-        jarNode.setProperty("version", jarDirectPojo.getVersion());
-        return jarNode;
+    private Node createNode(final BasicBuildPojo jarDirectPojo) {
+        final Node buildNode = graphDb.createNode(MyLabels.JAR);
+        buildNode.setProperty("buildPath", jarDirectPojo.getBuildPath());
+        return buildNode;
     }
 
     // shutdownHook
@@ -310,7 +345,7 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         });
     }
 
-    private void registerSuperJar(final String superPomFilePath) throws ParsePomException {
+    /*private void registerSuperJar(final String superPomFilePath) throws ParsePomException {
         try {
             final Document document = SAX_READER.read(new File(superPomFilePath));
             final Element rootElement = document.getRootElement();
@@ -332,13 +367,13 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
                 final String version = dependencyEle.elementTextTrim("version");
                 final String type = dependencyEle.elementTextTrim("type");
                 if (!(StringUtils.isNotBlank(type) && "pom".equalsIgnoreCase(type))) {
-                    superJarRegister.put(groupId + ":" + artifactId, new JarPojo(groupId, artifactId, jarVersionMap.getOrDefault(version, version)));
+                    superJarRegister.put(groupId + ":" + artifactId, new BasicBuildPojo(groupId, artifactId, jarVersionMap.getOrDefault(version, version)));
                 }
             }
         } catch (Exception e) {
             throw new ParsePomException(e);
         }
-    }
+    }*/
 
     enum MyLabels implements Label {
         JAR
