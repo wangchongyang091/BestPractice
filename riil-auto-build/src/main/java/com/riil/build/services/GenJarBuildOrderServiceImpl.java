@@ -7,6 +7,7 @@ import com.riil.build.exception.GenDependencyRealtionException;
 import com.riil.build.exception.ParsePomException;
 import com.riil.build.pojo.BasicBuildPojo;
 import com.riil.build.pojo.BasicBuildRelationPojo;
+import com.riil.build.pojo.BuildParams;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
@@ -39,7 +40,13 @@ import org.neo4j.graphdb.traversal.Uniqueness;
  * User: wangchongyang on 2017/9/8 0008.
  */
 class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
+    public static final String MODULE = "module";
     private static final SAXReader SAX_READER = new SAXReader();
+    private static final String ARTIFACT_ID = "artifactId";
+    private static final String GROUP_ID = "groupId";
+    private static final String BUILD_PATH = "buildPath";
+    private static final String PARENT = "parent";
+    private static final String MODULES = "modules";
     private GraphDatabaseService graphDb;
 
 
@@ -54,14 +61,42 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
     }
 
     @Override
-    public List<File> getPomsBySpecifyRange(final String path) throws ParsePomException {
-        if (StringUtils.isEmpty(path)) {
-            throw new ParsePomException("Specify parse path should not be null!");
-        }
+    public List<File> getPomsBySpecifyRange(final File parseFile) throws ParsePomException {
         try {
-            final File parseFile = new File(path);
             List<File> pomList = Lists.newArrayList();
             return getPomFiles(pomList, parseFile);
+        } catch (Exception e) {
+            throw new ParsePomException(e);
+        }
+    }
+
+    @Override
+    public Map<String, Set<String>> aggregatePomRegister(final List<File> pomFiles) throws ParsePomException {
+        try {
+//            Map<String, Set<String>> modulesRegister = Maps.newHashMap();
+            for (File pomFile : pomFiles) {
+                final Document document = SAX_READER.read(pomFile);
+                final Element projectEle = document.getRootElement();
+                String groupId = projectEle.elementTextTrim(GROUP_ID);
+                final String artifactId = projectEle.elementTextTrim(ARTIFACT_ID);
+                if (StringUtils.isBlank(groupId)) {
+                    groupId = projectEle.element(PARENT).elementTextTrim(GROUP_ID);
+                }
+                final Element modulesEle = projectEle.element(MODULES);
+                if (null != modulesEle) {
+                    final Iterator moduleEles = modulesEle.elementIterator(MODULE);
+                    Set<String> moduleSet = Sets.newHashSet();
+                    while (moduleEles.hasNext()) {
+                        final Element moduleEle = (Element) moduleEles.next();
+                        final String module = moduleEle.getTextTrim();
+                        if (StringUtils.isNotBlank(module)) {
+                            moduleSet.add(module);
+                        }
+                    }
+                    aggregatePomRegister.put(artifactId, moduleSet);
+                }
+            }
+            return aggregatePomRegister;
         } catch (Exception e) {
             throw new ParsePomException(e);
         }
@@ -74,51 +109,26 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
             for (File pomFile : pomFiles) {
                 final Document document = SAX_READER.read(pomFile);
                 final Element projectEle = document.getRootElement();
-                String groupId = projectEle.elementTextTrim("groupId");
-                final String artifactId = projectEle.elementTextTrim("artifactId");
+                String groupId = projectEle.elementTextTrim(GROUP_ID);
+                final String artifactId = projectEle.elementTextTrim(ARTIFACT_ID);
                 if (StringUtils.isBlank(groupId)) {
-                    groupId = projectEle.element("parent").elementTextTrim("groupId");
+                    groupId = projectEle.element(PARENT).elementTextTrim(GROUP_ID);
                 }
                 buildPathRegister.put(String.format("%s:%s", groupId, artifactId), pomFile.getParent());
             }
             return buildPathRegister;
-        } catch (DocumentException e) {
+        } catch (Exception e) {
             throw new ParsePomException(e);
         }
     }
 
     @Override
-    public Set<BasicBuildRelationPojo> getBuildRelations(final List<File> pomFiles) throws ParsePomException {
+    public Set<BasicBuildRelationPojo> genBuildRelations(final List<File> pomFiles) throws ParsePomException {
         final Map<String, String> buildPathRegister = genProjectBuildPathRegister(pomFiles);
         Set<BasicBuildRelationPojo> relationPojoSet = Sets.newHashSet();
         try {
             for (File pomFile : pomFiles) {
-                final Document document = SAX_READER.read(pomFile);
-                final Element projectEle = document.getRootElement();
-                final String parentGroupId = projectEle.element("parent").elementTextTrim("groupId");
-                final String parentArtifactId = projectEle.element("parent").elementTextTrim("artifactId");
-                Set<BasicBuildPojo> jarDirectPojoSet = Sets.newHashSet();
-                addBeforeBuildPath(buildPathRegister, jarDirectPojoSet, parentGroupId, parentArtifactId);
-                final BasicBuildRelationPojo RelationPojo = new BasicBuildRelationPojo();
-                RelationPojo.setBuildPath(pomFile.getParent());
-                final Element dependencyManagementEle = projectEle.element("dependencyManagement");
-                if (null != dependencyManagementEle) {
-                    final Iterator dependencyEles = dependencyManagementEle.element("dependencies").elementIterator("dependency");
-                    while (dependencyEles.hasNext()) {
-                        final Element dependencyEle = (Element) dependencyEles.next();
-                        if ("pom".equals(dependencyEle.elementTextTrim("type"))) {
-                            addBeforeBuildPath(buildPathRegister, jarDirectPojoSet, dependencyEle.elementTextTrim("groupId"), dependencyEle.elementTextTrim("artifactId"));
-                        }
-                    }
-                } else {
-                    final Iterator dependencyEles = projectEle.element("dependencies").elementIterator("dependency");
-                    while (dependencyEles.hasNext()) {
-                        final Element dependencyEle = (Element) dependencyEles.next();
-                        addBeforeBuildPath(buildPathRegister, jarDirectPojoSet, dependencyEle.elementTextTrim("groupId"), dependencyEle.elementTextTrim("artifactId"));
-                    }
-                }
-                RelationPojo.setBeforeBuilds(jarDirectPojoSet);
-                relationPojoSet.add(RelationPojo);
+                relationPojoSet.add(GenBuildRelationByPom(buildPathRegister, pomFile));
             }
         } catch (Exception e) {
             throw new ParsePomException(e);
@@ -126,17 +136,153 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         return relationPojoSet;
     }
 
+    private BasicBuildRelationPojo GenBuildRelationByPom(final Map<String, String> buildPathRegister, final File pomFile) throws DocumentException {
+        final Document document = SAX_READER.read(pomFile);
+        final Element projectEle = document.getRootElement();
+        final Element parentEle = projectEle.element(PARENT);
+        Set<BasicBuildPojo> beforeBuildPojos = Sets.newHashSet();
+//                add parent before
+        String parentGroupId = null;
+        if (null != parentEle) {
+            parentGroupId = parentEle.elementTextTrim(GROUP_ID);
+            final String parentArtifactId = parentEle.elementTextTrim(ARTIFACT_ID);
+            beforeBuildPojos = Sets.newHashSet();
+            addBeforeBuildPath(buildPathRegister, beforeBuildPojos, parentGroupId, parentArtifactId);
+        }
+        final BasicBuildRelationPojo relationPojo = new BasicBuildRelationPojo();
+        relationPojo.setBuildPath(pomFile.getParent());
+        final String groupId = projectEle.elementTextTrim(GROUP_ID);
+        final String artifactId = projectEle.elementTextTrim(ARTIFACT_ID);
+        relationPojo.setArtifactId(artifactId);
+        relationPojo.setGroupId(StringUtils.isBlank(groupId) ? parentGroupId : groupId);
+        final Element dependencyManagementEle = projectEle.element("dependencyManagement");
+        if (null != dependencyManagementEle) {
+            final Iterator dependencyEles = dependencyManagementEle.element("dependencies").elementIterator("dependency");
+            while (dependencyEles.hasNext()) {
+                final Element dependencyEle = (Element) dependencyEles.next();
+                if ("pom".equals(dependencyEle.elementTextTrim("type"))) {
+                    addBeforeBuildPath(buildPathRegister, beforeBuildPojos, dependencyEle.elementTextTrim(GROUP_ID), dependencyEle.elementTextTrim(ARTIFACT_ID));
+                }
+            }
+        }
+        final Element dependenciesEle = projectEle.element("dependencies");
+        if (null != dependenciesEle) {
+            final Iterator dependencyEles = dependenciesEle.elementIterator("dependency");
+            while (dependencyEles.hasNext()) {
+                final Element dependencyEle = (Element) dependencyEles.next();
+                addBeforeBuildPath(buildPathRegister, beforeBuildPojos, dependencyEle.elementTextTrim(GROUP_ID), dependencyEle.elementTextTrim(ARTIFACT_ID));
+            }
+        }
+        relationPojo.setBeforeBuilds(beforeBuildPojos);
+        return relationPojo;
+    }
+
     @Override
-    public List<Set<BasicBuildPojo>> getJarBuildOrder(final Set<BasicBuildRelationPojo> jarDirectPojos, String neo4jDbPath) throws GenDependencyRealtionException {
+    public void addData2Graph(BuildParams buildParams) {
+//        FileUtils.deleteRecursively(DB_PATH);
+//        transaction
+        startDb(buildParams.getNeo4jDbPath());
+        try (Transaction tx = graphDb.beginTx()) {
+//            addData
+            addData(buildParams.getRelationPojos(), buildParams.getRelationshipType(), buildParams.getLabel());
+            tx.success();
+        }
+    }
+
+    @Override
+    public List<Set<BasicBuildPojo>> getJarBuildOrder(BuildParams buildParams) throws GenDependencyRealtionException {
         try {
-            startDb(neo4jDbPath);
-//            createDb(jarDirectPojos);
-            final Map<Node, Integer> nodeIntegerMap = generateNodeLongestPath();
-            final List<Set<Node>> buildNodeList = convert2buildSort(nodeIntegerMap);
-            return covert2JarList(buildNodeList);
+            startDb(buildParams.getNeo4jDbPath());
+            final Map<Node, Integer> nodeIntegerMap = generateNodeLongestPath(buildParams.getLabel(), buildParams.getRelationshipType());
+            System.out.println("node length=>" + nodeIntegerMap.values().size());
+            if (buildParams.isAggregate()) {
+                processAggregateNode(nodeIntegerMap);
+            }
+            System.out.println("node length after process=>" + nodeIntegerMap.values().size());
+            final List<Set<Node>> nodeBuildList = convert2buildSort(nodeIntegerMap);
+            System.out.printf("build sort=>%s%n", nodeBuildList);
+            return covert2JarList(nodeBuildList);
         } catch (Exception e) {
             throw new GenDependencyRealtionException(e);
         }
+    }
+
+    private void processAggregateNode(final Map<Node, Integer> nodeLengthMap) {
+        Map<String, Node> nodeMap = registerNode(nodeLengthMap);
+//        给聚合模块排序，例如{A=[B, C, E, F], B=[H, I], H=[J, G]}排序后为[H=[J, G], B=[H, I], A=[B, C, E, F]]
+        final List<Map.Entry<String, Set<String>>> aggregateEntrys = Lists.newArrayList(aggregatePomRegister.entrySet());
+        Collections.sort(aggregateEntrys, new Comparator<Map.Entry<String, Set<String>>>() {
+            @Override
+            public int compare(final Map.Entry<String, Set<String>> e1, final Map.Entry<String, Set<String>> e2) {
+                return e1.getValue().contains(e2.getKey()) ? 1 : -1;
+            }
+        });
+        for (Map.Entry<String, Set<String>> aggregateEntry : aggregateEntrys) {
+            final Set<String> childModules = aggregateEntry.getValue();
+            final String aggregateModule = aggregateEntry.getKey();
+            Set<String> modules = Sets.newHashSet();
+            modules.addAll(childModules);
+            modules.add(aggregateModule);
+            final Integer modulesMinLength = calculateAggregateModuleMinLength(nodeLengthMap, nodeMap, modules);
+            resetAggregateNodeLength(nodeLengthMap, nodeMap, aggregateModule, modulesMinLength);
+            removeChildNodes(nodeLengthMap, nodeMap, childModules);
+        }
+    }
+
+    private void removeChildNodes(final Map<Node, Integer> nodeLengthMap, final Map<String, Node> nodeMap, final Set<String> childModules) {
+        for (String module : childModules) {
+            final String realKey = getModuleRegisterRealKey(nodeMap, module);
+            nodeLengthMap.remove(nodeMap.get(realKey));
+        }
+    }
+
+    private void resetAggregateNodeLength(final Map<Node, Integer> nodeLengthMap, final Map<String, Node> nodeMap, final String module, final Integer modulesMinLength) {
+        final String realKey = getModuleRegisterRealKey(nodeMap, module);
+        nodeLengthMap.put(nodeMap.get(realKey), modulesMinLength);
+    }
+
+    private Integer calculateAggregateModuleMinLength(final Map<Node, Integer> nodeLengthMap, final Map<String, Node> nodeMap, final Set<String> modules) {
+        List<Integer> modulesLengthList = Lists.newArrayList();
+        for (String module : modules) {
+            String realKey = getModuleRegisterRealKey(nodeMap, module);
+            final Node moduleNodes = nodeMap.get(realKey);
+            modulesLengthList.add(nodeLengthMap.get(moduleNodes));
+        }
+        Collections.sort(modulesLengthList, new Comparator<Integer>() {
+            @Override
+            public int compare(final Integer i1, final Integer i2) {
+                return i1 < i2 ? -1 : 1;
+            }
+        });
+        return modulesLengthList.get(0);
+    }
+
+    private String getModuleRegisterRealKey(final Map<String, Node> nodeMap, final String module) {
+        final Set<String> keySet = nodeMap.keySet();
+        String realKey = module;
+        System.out.println(module);
+        for (String key : keySet) {
+            if (key.contains(module)) {
+                realKey = key;
+                System.out.println(key);
+                break;
+            }
+        }
+        return realKey;
+    }
+
+    private Map<String, Node> registerNode(final Map<Node, Integer> nodeLengthMap) {
+        Map<String, Node> nodeMap = Maps.newHashMap();
+        for (Map.Entry<Node, Integer> entry : nodeLengthMap.entrySet()) {
+            final Node node = entry.getKey();
+            final String buildPath = (String) node.getProperty(BUILD_PATH);
+            final String[] splitDir = StringUtils.split(buildPath, "\\\\");
+            final String key = splitDir[splitDir.length - 1];
+//            由于RIIL中的maven项目POM文件的写法很多都不是官方推荐值(如artifactId与直接项目路径不符)，故采用artifactId和直接项目路径拼接为KEY
+            nodeMap.put(String.format("%s:%s", node.getProperties(ARTIFACT_ID), key), node);
+            System.out.printf("%s:%s:%s%n", node.getProperty(GROUP_ID), node.getProperty(ARTIFACT_ID), buildPath);
+        }
+        return nodeMap;
     }
 
     private List<File> getPomFiles(List<File> fileList, final File parseFile) throws IOException {
@@ -160,7 +306,7 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         for (Set<Node> nodes : buildNodeList) {
             Set<BasicBuildPojo> basicBuildPojoSet = Sets.newHashSet();
             for (Node node : nodes) {
-                basicBuildPojoSet.add(new BasicBuildPojo((String) node.getProperty("buildPath")));
+                basicBuildPojoSet.add(new BasicBuildPojo((String) node.getProperty(GROUP_ID), (String) node.getProperty(ARTIFACT_ID), (String) node.getProperty(BUILD_PATH)));
             }
             buildJarList.add(basicBuildPojoSet);
         }
@@ -168,10 +314,23 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
     }
 
 
-    private void addBeforeBuildPath(final Map<String, String> buildPathRegister, final Set<BasicBuildPojo> jarDirectPojoSet, final String groupId, final String artifactId) {
-        String buildPath = buildPathRegister.get(String.format("%s:%s", groupId, artifactId));
+    private void addBeforeBuildPath(final Map<String, String> buildPathRegister, final Set<BasicBuildPojo> beforeBuildPojos, final String groupId, final String artifactId) {
+        String buildPath;
+        if (null != groupId) {
+            buildPath = buildPathRegister.get(String.format("%s:%s", groupId, artifactId));
+        } else {
+            final Set<String> keySet = buildPathRegister.keySet();
+            String replaceKey = null;
+            for (String key : keySet) {
+                if (key.contains(artifactId)) {
+                    replaceKey = key;
+                    break;
+                }
+            }
+            buildPath = buildPathRegister.get(replaceKey);
+        }
         if (null != buildPath) {
-            jarDirectPojoSet.add(new BasicBuildPojo(buildPath));
+            beforeBuildPojos.add(new BasicBuildPojo(groupId, artifactId, buildPath));
         }
     }
 
@@ -181,67 +340,58 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         registerShutdownHook(graphDb);
     }
 
-    private void createDb(Set<BasicBuildRelationPojo> jarDirectPojos) {
-//        FileUtils.deleteRecursively(DB_PATH);
-//        transaction
-        try (Transaction tx = graphDb.beginTx()) {
-//            addData
-            addData(jarDirectPojos);
-            tx.success();
-        }
-    }
-
-    private void addData(Set<BasicBuildRelationPojo> jarDirectPojos) {
-        if (CollectionUtils.isNotEmpty(jarDirectPojos)) {
+    private void addData(Set<BasicBuildRelationPojo> relationPojos, RelationshipType relationshipType, Label label) {
+        if (CollectionUtils.isNotEmpty(relationPojos)) {
             Map<Node, Set<Node>> nodeRelationMap = Maps.newHashMap();
             Map<String, Node> nodeRegister = Maps.newHashMap();
-            for (BasicBuildRelationPojo buildRelation : jarDirectPojos) {
+            for (BasicBuildRelationPojo buildRelation : relationPojos) {
                 String nodeMark = buildRelation.getBuildPath();
-                Node buildNode = getNode(nodeRegister, buildRelation, nodeMark);
+//                System.out.println(nodeMark);
+                Node currentNode = getNode(nodeRegister, buildRelation, nodeMark, label);
                 final Set<BasicBuildPojo> jarDepSet = buildRelation.getBeforeBuilds();
-                Set<Node> jarDepNodeSet = Sets.newHashSet();
+                Set<Node> beforeNodes = Sets.newHashSet();
                 if (CollectionUtils.isNotEmpty(jarDepSet)) {
                     for (BasicBuildPojo build : jarDepSet) {
                         nodeMark = build.getBuildPath();
-                        Node jarDepNode = getNode(nodeRegister, build, nodeMark);
-                        jarDepNodeSet.add(jarDepNode);
+                        Node beforeNode = getNode(nodeRegister, build, nodeMark, label);
+                        beforeNodes.add(beforeNode);
                     }
                 }
-                nodeRelationMap.put(buildNode, jarDepNodeSet);
+                nodeRelationMap.put(currentNode, beforeNodes);
             }
             for (Map.Entry<Node, Set<Node>> nodeSetEntry : nodeRelationMap.entrySet()) {
                 final Set<Node> depNodes = nodeSetEntry.getValue();
+                final Node curNode = nodeSetEntry.getKey();
                 if (CollectionUtils.isNotEmpty(depNodes)) {
-                    final Node curNode = nodeSetEntry.getKey();
                     for (Node depNode : depNodes) {
-                        curNode.createRelationshipTo(depNode, MyRelationshipTypes.DEPEND_ON);
+                        curNode.createRelationshipTo(depNode, relationshipType);
                     }
                 }
             }
         }
     }
 
-    private Node getNode(final Map<String, Node> nodeRegister, final BasicBuildPojo buildRelation, final String nodeMark) {
+    private Node getNode(final Map<String, Node> nodeRegister, final BasicBuildPojo buildRelation, final String nodeMark, Label label) {
         Node buildNode;
         if (nodeRegister.containsKey(nodeMark)) {
             buildNode = nodeRegister.get(nodeMark);
         } else {
-            buildNode = createNode(buildRelation);
+            buildNode = createNode(buildRelation, label);
             nodeRegister.put(nodeMark, buildNode);
         }
         return buildNode;
     }
 
-    private Map<Node, Integer> generateNodeLongestPath() {
-        final Set<Node> endNodes = queryEndNodes();
-        final Set<Node> startNodes = queryStartNodes();
+    private Map<Node, Integer> generateNodeLongestPath(Label label, RelationshipType relationshipType) {
+        final Set<Node> endNodes = queryEndNodes(label, relationshipType);
+        final Set<Node> startNodes = queryStartNodes(label, relationshipType);
         Node[] ends = new Node[endNodes.size()];
         int i = 0;
         for (Node endNode : endNodes) {
             ends[i++] = endNode;
         }
         final Transaction tx = graphDb.beginTx();
-        final Traverser traverse = graphDb.traversalDescription().depthFirst().uniqueness(Uniqueness.NODE_PATH).relationships(MyRelationshipTypes.DEPEND_ON, Direction.OUTGOING).evaluator(Evaluators.fromDepth(1)).evaluator(Evaluators.pruneWhereEndNodeIs(ends)).traverse(startNodes);
+        final Traverser traverse = graphDb.traversalDescription().depthFirst().uniqueness(Uniqueness.NODE_PATH).relationships(relationshipType, Direction.OUTGOING)/*.evaluator(Evaluators.fromDepth(1))*/.evaluator(Evaluators.pruneWhereEndNodeIs(ends)).traverse(startNodes);
         tx.success();
         Map<Node, Integer> nodeLengthMap = Maps.newHashMap();
         for (Path path : traverse) {
@@ -259,7 +409,6 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
                 nodeLengthMap.put(node, k++);
             }
         }
-        System.out.println(nodeLengthMap);
         return nodeLengthMap;
     }
 
@@ -286,49 +435,52 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         for (Map.Entry<Integer, Set<Node>> entry : lengthNodeMapList) {
             nodeBuildList.add(entry.getValue());
         }
-        System.out.println(nodeBuildList);
         return nodeBuildList;
     }
 
 
-    private Set<Node> queryStartNodes() {
-        return getStartOrEndNodes(true);
+    private Set<Node> queryStartNodes(Label label, RelationshipType relationshipType) {
+        return getStartOrEndNodes(true, label, relationshipType);
     }
 
-    private Set<Node> queryEndNodes() {
-        return getStartOrEndNodes(false);
+    private Set<Node> queryEndNodes(Label label, RelationshipType relationshipType) {
+        return getStartOrEndNodes(false, label, relationshipType);
 
     }
 
-    private Set<Node> getStartOrEndNodes(boolean isStartNode) {
-        Set<Node> endNodes = Sets.newHashSet();
+    private Set<Node> getStartOrEndNodes(boolean isStartNode, Label label, RelationshipType relationshipType) {
+        Set<Node> outcomeNodes = Sets.newHashSet();
         try (Transaction tx = graphDb.beginTx()) {
-            final ResourceIterator<Node> jarNodes = graphDb.findNodes(MyLabels.JAR);
-            while (jarNodes.hasNext()) {
-                final Node jarNode = jarNodes.next();
-                if (jarNode.hasRelationship(MyRelationshipTypes.DEPEND_ON)) {
-                    final Iterable<Relationship> jarRelationships = jarNode.getRelationships(MyRelationshipTypes.DEPEND_ON);
+            final ResourceIterator<Node> buildNodes = graphDb.findNodes(label);
+            while (buildNodes.hasNext()) {
+                final Node buildNode = buildNodes.next();
+                if (buildNode.hasRelationship(relationshipType)) {
+                    final Iterable<Relationship> jarRelationships = buildNode.getRelationships(relationshipType);
                     boolean isOutcome = true;
                     for (Relationship jarRelationship : jarRelationships) {
                         final Node node = isStartNode ? jarRelationship.getEndNode() : jarRelationship.getStartNode();
-                        if (node.equals(jarNode)) {
+                        if (node.equals(buildNode)) {
                             isOutcome = false;
                             break;
                         }
                     }
                     if (isOutcome) {
-                        endNodes.add(jarNode);
+                        outcomeNodes.add(buildNode);
                     }
+                } else {
+                    outcomeNodes.add(buildNode);
                 }
             }
             tx.success();
         }
-        return endNodes;
+        return outcomeNodes;
     }
 
-    private Node createNode(final BasicBuildPojo jarDirectPojo) {
-        final Node buildNode = graphDb.createNode(MyLabels.JAR);
-        buildNode.setProperty("buildPath", jarDirectPojo.getBuildPath());
+    private Node createNode(final BasicBuildPojo buildPojo, Label label) {
+        final Node buildNode = graphDb.createNode(label);
+        buildNode.setProperty(GROUP_ID, buildPojo.getGroupId());
+        buildNode.setProperty(ARTIFACT_ID, buildPojo.getArtifactId());
+        buildNode.setProperty(BUILD_PATH, buildPojo.getBuildPath());
         return buildNode;
     }
 
@@ -362,8 +514,8 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
             final Iterator<Element> dependencyIterator = dependenciesEle.elementIterator("dependency");
             while (dependencyIterator.hasNext()) {
                 final Element dependencyEle = dependencyIterator.next();
-                final String groupId = dependencyEle.elementTextTrim("groupId");
-                final String artifactId = dependencyEle.elementTextTrim("artifactId");
+                final String groupId = dependencyEle.elementTextTrim(GROUP_ID);
+                final String artifactId = dependencyEle.elementTextTrim(ARTIFACT_ID);
                 final String version = dependencyEle.elementTextTrim("version");
                 final String type = dependencyEle.elementTextTrim("type");
                 if (!(StringUtils.isNotBlank(type) && "pom".equalsIgnoreCase(type))) {
@@ -375,11 +527,5 @@ class GenJarBuildOrderServiceImpl implements GenJarBuildOrderService {
         }
     }*/
 
-    enum MyLabels implements Label {
-        JAR
-    }
 
-    enum MyRelationshipTypes implements RelationshipType {
-        DEPEND_ON
-    }
 }

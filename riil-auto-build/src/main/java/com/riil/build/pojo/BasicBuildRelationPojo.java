@@ -21,8 +21,8 @@ public class BasicBuildRelationPojo extends BasicBuildPojo {
 
     @Override
     public String toString() {
-//        return String.format("%s:%s:%s\n%s\ndirectDependencySize=%d", this.getGroupId(), this.getArtifactId(), this.getVersion(), beforeBuilds(), getBeforeBuilds().size());
-        return this.getBuildPath() + "\nbefore build=>" + beforeBuilds();
+        return String.format("\n%s\n%s\nbefore build size=%d", this.getArtifactId(), beforeBuilds(), getBeforeBuilds().size());
+//        return this.getBuildPath() + "\nbefore build=>" + beforeBuilds();
     }
 
 
@@ -30,8 +30,8 @@ public class BasicBuildRelationPojo extends BasicBuildPojo {
         final Set<BasicBuildPojo> directDependency = getBeforeBuilds();
         List<String> buildPaths = Lists.newArrayList();
         for (BasicBuildPojo basicBuildPojo : directDependency) {
-//            buildPaths.add(String.format("\n  %s:%s:%s", basicBuildPojo.getGroupId(), basicBuildPojo.getArtifactId(), basicBuildPojo.getVersion()));
-            buildPaths.add(String.format("\n  %s", basicBuildPojo.getBuildPath()));
+            buildPaths.add(String.format("\n  %s", basicBuildPojo.getArtifactId()));
+//            buildPaths.add(String.format("\n  %s", basicBuildPojo.getBuildPath()));
         }
         return buildPaths;
     }
